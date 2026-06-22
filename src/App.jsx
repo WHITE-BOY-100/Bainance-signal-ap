@@ -407,88 +407,98 @@ function SignalBadge({ label, score }) {
     "WAIT": "bg-transparent text-[#5A6472] border-[#2A323D]",
   };
   return (
-    <span className={`
-      px-2.5 py-1 rounded-md text-[10px] font-bold border uppercase tracking-wider
-      ${styles[label] || styles["NEUTRAL"]}
-    `}>
+    <span className={`inline-flex items-center justify-center px-2 py-0.5 rounded text-[10px] font-bold tracking-wider border ${styles[label]} font-mono whitespace-nowrap`}>
       {label}
     </span>
   );
 }
 
-/* ---------- strength bar ---------- */
 function StrengthBar({ score }) {
-  // score is -100..100. we map to 0..100 for a bar.
-  const pct = (score + 100) / 2;
-  const color = score >= 20 ? "#3DD68C" : score <= -20 ? "#F2545B" : "#8B96A5";
+  const pct = Math.abs(score);
+  const positive = score >= 0;
   return (
-    <div className="w-16 h-1.5 bg-[#1C232C] rounded-full overflow-hidden flex">
+    <div className="w-16 h-1.5 bg-[#1C232C] rounded-full overflow-hidden relative">
       <div
-        className="h-full transition-all duration-500 ease-out"
-        style={{ width: `${pct}%`, backgroundColor: color }}
+        className="h-full rounded-full transition-all duration-500"
+        style={{
+          width: `${pct}%`,
+          background: positive ? "#3DD68C" : "#F2545B",
+          marginLeft: positive ? "0" : "auto",
+        }}
       />
     </div>
   );
 }
 
+/* ---------- candlestick chart modal ---------- */
 const PATTERN_COLOR = {
   bullish: "#3DD68C",
   bearish: "#F2545B",
-  neutral: "#8B96A5",
+  neutral: "#F0B90B",
 };
 
-/* ---------- candlestick chart modal ---------- */
 function CandlestickChart({ symbol, klines, patterns, levels, interval, onClose }) {
   const [hoverIdx, setHoverIdx] = useState(null);
-  const [showCalc, setShowCalc] = useState(false);
-  const [zoomRange, setZoomRange] = useState(null); // [startIndex, endIndex]
-  const svgRef = useRef(null);
-
-  const n = klines.length;
-  const w = 840, h = 420;
-  const padL = 60, padR = 20, padT = 30, padB = 40;
-  const chartW = w - padL - padR;
-  const chartH = h - padT - padB;
-  const volH = 60;
-  const plotH = chartH - volH;
-  const volYTop = padT + plotH + 10;
-
-  // zoom logic
-  const view = zoomRange ? klines.slice(zoomRange[0], zoomRange[1] + 1) : klines;
-  const viewOffset = zoomRange ? zoomRange[0] : 0;
-  const nv = view.length;
-
-  const minP = Math.min(...view.map((k) => k.low));
-  const maxP = Math.max(...view.map((k) => k.high));
-  const rangeP = maxP - minP || 1;
-  const maxVol = Math.max(...view.map((k) => k.volume || 0)) || 1;
-
-  const yFor = (p) => padT + plotH - ((p - minP) / rangeP) * plotH;
-  const xFor = (i) => padL + (i * chartW) / (nv - 1 || 1);
-  const slot = chartW / (nv || 1);
-  const candleW = Math.max(1, slot * 0.7);
-
-  const hovered = hoverIdx != null ? view[hoverIdx] : null;
-  const patternAt = {};
-  patterns.forEach((p) => {
-    if (p.index >= viewOffset && p.index < viewOffset + nv) {
-      patternAt[p.index - viewOffset] = p;
-    }
-  });
-
-  const gridLines = [];
-  for (let i = 0; i <= 5; i++) {
-    gridLines.push(minP + (rangeP * i) / 5);
-  }
-
-  // drag-to-zoom state
+  const [zoomRange, setZoomRange] = useState(null); // [startIdx, endIdx] or null = full range
   const [dragStart, setDragStart] = useState(null);
   const [dragEnd, setDragEnd] = useState(null);
+  const [showCalc, setShowCalc] = useState(false);
+  const svgRef = useRef(null);
+
+  if (!klines || klines.length === 0) return null;
+
+  const fullN = klines.length;
+  const view = zoomRange ? klines.slice(zoomRange[0], zoomRange[1] + 1) : klines;
+  const viewOffset = zoomRange ? zoomRange[0] : 0;
+
+  const w = 900, h = 420;
+  const padL = 56, padR = 16, padT = 16, padB = 10;
+  const volH = 70;
+  const chartH = h - padB - volH - 6;
+  const plotW = w - padL - padR;
+  const plotH = chartH - padT;
+
+  const highs = view.map((k) => k.high);
+  const lows = view.map((k) => k.low);
+  let maxP = Math.max(...highs);
+  let minP = Math.min(...lows);
+  // include S/R levels in range so lines stay visible when relevant
+  if (levels && levels.length) {
+    levels.forEach((l) => {
+      if (l.price > maxP) maxP = l.price;
+      if (l.price < minP) minP = l.price;
+    });
+  }
+  const pad5 = (maxP - minP) * 0.06 || maxP * 0.01;
+  maxP += pad5;
+  minP -= pad5;
+  const range = maxP - minP || 1;
+
+  const n = view.length;
+  const slot = plotW / n;
+  const candleW = Math.max(2, slot * 0.62);
+
+  const maxVol = Math.max(...view.map((k) => k.volume || 0), 1);
+
+  const yFor = (price) => padT + plotH - ((price - minP) / range) * plotH;
+  const xFor = (i) => padL + i * slot + slot / 2;
+  const volYTop = chartH + 6;
+
+  const patternAt = {};
+  patterns.forEach((p) => {
+    const localIdx = p.index - viewOffset;
+    if (localIdx >= 0 && localIdx < n) patternAt[localIdx] = p;
+  });
+
+  const gridLevels = 5;
+  const gridLines = Array.from({ length: gridLevels + 1 }, (_, i) => minP + (range * i) / gridLevels);
+
+  const hovered = hoverIdx != null ? view[hoverIdx] : null;
 
   function handleMouseDown(e) {
     const rect = svgRef.current.getBoundingClientRect();
     const x = e.clientX - rect.left;
-    const idx = Math.max(0, Math.min(nv - 1, Math.floor((x - padL) / slot)));
+    const idx = Math.max(0, Math.min(n - 1, Math.floor((x - padL) / slot)));
     setDragStart(idx);
     setDragEnd(idx);
   }
@@ -496,7 +506,7 @@ function CandlestickChart({ symbol, klines, patterns, levels, interval, onClose 
     if (dragStart == null) return;
     const rect = svgRef.current.getBoundingClientRect();
     const x = e.clientX - rect.left;
-    const idx = Math.max(0, Math.min(nv - 1, Math.floor((x - padL) / slot)));
+    const idx = Math.max(0, Math.min(n - 1, Math.floor((x - padL) / slot)));
     setDragEnd(idx);
   }
   function handleMouseUp() {
@@ -848,6 +858,31 @@ function Row({ label, value, highlight }) {
    MAIN APP
    ============================================================ */
 
+/* ---------- Binance signed request (HMAC-SHA256, Web Crypto API) ---------- */
+async function hmacSHA256(secret, message) {
+  const enc = new TextEncoder();
+  const key = await crypto.subtle.importKey(
+    "raw", enc.encode(secret), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]
+  );
+  const sig = await crypto.subtle.sign("HMAC", key, enc.encode(message));
+  return Array.from(new Uint8Array(sig)).map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+async function fetchAccountBalance(apiKey, apiSecret) {
+  const ts = Date.now();
+  const query = `timestamp=${ts}&recvWindow=10000`;
+  const sig = await hmacSHA256(apiSecret, query);
+  const url = `https://api.binance.com/api/v3/account?${query}&signature=${sig}`;
+  const res = await fetch(url, { headers: { "X-MBX-APIKEY": apiKey } });
+  if (!res.ok) throw new Error(`Binance API error: ${res.status}`);
+  const data = await res.json();
+  // return only non-zero balances
+  return (data.balances || [])
+    .map((b) => ({ asset: b.asset, free: parseFloat(b.free), locked: parseFloat(b.locked) }))
+    .filter((b) => b.free + b.locked > 0)
+    .sort((a, b) => (b.free + b.locked) - (a.free + a.locked));
+}
+
 export default function ScalpTerminal() {
   const [rows, setRows] = useState({}); // symbol -> { closes, highs, lows, price, pct24h, signal }
   const [sortKey, setSortKey] = useState("score");
@@ -861,33 +896,16 @@ export default function ScalpTerminal() {
   const [watchlist, setWatchlist] = useState(() => new Set());
   const [watchOnly, setWatchOnly] = useState(false);
   const [alertsEnabled, setAlertsEnabled] = useState(false);
-  const [recentAlert, setRecentAlert] = useState(null); // { symbol, label } for toast
+  const [recentAlert, setRecentAlert] = useState(null);
+  const [balances, setBalances] = useState(null);
+  const [balanceLoading, setBalanceLoading] = useState(false);
+  const [balanceError, setBalanceError] = useState(null);
+  const [showBalance, setShowBalance] = useState(false); // { symbol, label } for toast
   const wsRefs = useRef({});
   const dataRef = useRef({});
   const alertedRef = useRef({}); // symbol -> last alerted label, to avoid spamming
   const alertsEnabledRef = useRef(false);
-
-  // --- NEW: Binance Balance State ---
-  const [userBalances, setUserBalances] = useState([]);
-
   useEffect(() => { alertsEnabledRef.current = alertsEnabled; }, [alertsEnabled]);
-
-  // --- NEW: Fetch Balance Effect ---
-  useEffect(() => {
-    async function getMyBalance() {
-      try {
-        const response = await fetch('/api/binance');
-        const data = await response.json();
-        if (data.balances) {
-          const activeBalances = data.balances.filter(b => parseFloat(b.free) > 0);
-          setUserBalances(activeBalances);
-        }
-      } catch (err) {
-        console.log("Balance data fetch error");
-      }
-    }
-    getMyBalance();
-  }, []);
 
   function toggleWatch(symbol) {
     setWatchlist((prev) => {
@@ -896,6 +914,26 @@ export default function ScalpTerminal() {
       else next.add(symbol);
       return next;
     });
+  }
+
+  async function loadBalance() {
+    const apiKey = import.meta.env.VITE_BINANCE_API_KEY;
+    const apiSecret = import.meta.env.VITE_BINANCE_SECRET;
+    if (!apiKey || !apiSecret) {
+      setBalanceError("API keys not configured in Vercel environment variables.");
+      return;
+    }
+    setBalanceLoading(true);
+    setBalanceError(null);
+    try {
+      const data = await fetchAccountBalance(apiKey, apiSecret);
+      setBalances(data);
+      setShowBalance(true);
+    } catch (e) {
+      setBalanceError(e.message || "Failed to fetch balance.");
+    } finally {
+      setBalanceLoading(false);
+    }
   }
 
   /* fetch initial klines for all symbols via REST, then open websockets for live ticks.
@@ -1092,21 +1130,19 @@ export default function ScalpTerminal() {
           <span className="text-[#3DD68C] uppercase text-[10px] tracking-wider font-bold">
             {connStatus === "live" ? "● live" : "connecting…"}
           </span>
+          <button
+            onClick={() => { if (!balances) loadBalance(); else setShowBalance((s) => !s); }}
+            disabled={balanceLoading}
+            className={`text-[10px] font-bold font-mono px-2.5 py-1 rounded border transition-colors ${
+              showBalance
+                ? "bg-[#F0B90B] text-[#0D1117] border-[#F0B90B]"
+                : "text-[#8B96A5] border-[#242C36] hover:text-[#E6EDF3]"
+            }`}
+          >
+            {balanceLoading ? "loading…" : "⬡ balance"}
+          </button>
         </div>
       </div>
-
-      {/* --- NEW: Assets Strip --- */}
-      {userBalances.length > 0 && (
-        <div className="flex items-center gap-3 px-5 py-2 bg-[#11161D] border-b border-[#1C232C] overflow-x-auto whitespace-nowrap scrollbar-hide">
-          <span className="text-[10px] text-[#5A6472] uppercase tracking-widest font-bold">My Assets:</span>
-          {userBalances.map(b => (
-            <div key={b.asset} className="flex items-center gap-1.5 px-2 py-0.5 rounded bg-[#161B22] border border-[#242C36]">
-              <span className="text-[11px] text-[#8B96A5] font-mono">{b.asset}</span>
-              <span className="text-[11px] text-[#3DD68C] font-bold tabular-nums">{parseFloat(b.free).toFixed(4)}</span>
-            </div>
-          ))}
-        </div>
-      )}
 
       {/* TOOLBAR */}
       <div className="px-5 py-2.5 border-b border-[#1C232C] flex items-center gap-3 flex-wrap bg-[#0D1117]">
@@ -1171,6 +1207,35 @@ export default function ScalpTerminal() {
           click a row to open chart · rule-based: RSI + MACD + MA cross + patterns
         </span>
       </div>
+
+      {/* BALANCE PANEL */}
+      {balanceError && (
+        <div className="px-5 py-2 bg-[#1A0F11] border-b border-[#F2545B]/30 text-[11px] text-[#F2545B] font-mono flex items-center gap-2">
+          <span>⚠</span> {balanceError}
+        </div>
+      )}
+      {showBalance && balances && (
+        <div className="border-b border-[#1C232C] bg-[#0F141A] px-5 py-3 flex items-center gap-4 flex-wrap">
+          <span className="text-[10px] text-[#5A6472] font-sans uppercase tracking-wider">Account Balance</span>
+          {balances.slice(0, 10).map((b) => (
+            <div key={b.asset} className="flex items-center gap-1.5 bg-[#151A21] border border-[#242C36] rounded px-2.5 py-1.5">
+              <span className="text-[11px] font-bold text-[#F0B90B] font-mono">{b.asset}</span>
+              <span className="text-[11px] text-[#E6EDF3] font-mono tabular-nums">
+                {(b.free + b.locked).toFixed(4)}
+              </span>
+              {b.locked > 0 && (
+                <span className="text-[9px] text-[#5A6472] font-mono">({b.locked.toFixed(4)} locked)</span>
+              )}
+            </div>
+          ))}
+          <button
+            onClick={loadBalance}
+            className="text-[10px] text-[#5A6472] hover:text-[#E6EDF3] font-mono ml-auto transition-colors"
+          >
+            ↻ refresh
+          </button>
+        </div>
+      )}
 
       {/* TABLE */}
       <div className="flex-1 overflow-auto">
@@ -1336,16 +1401,14 @@ function Th({ label, sortKey, sortKeyActive, sortDir, toggleSort, align = "right
   return (
     <th
       onClick={() => toggleSort(sortKey)}
-      className={`px-3 py-2 font-medium cursor-pointer hover:text-[#E6EDF3] transition-colors group ${
+      className={`px-3 py-2 font-medium cursor-pointer select-none hover:text-[#8B96A5] transition-colors ${
         align === "left" ? "text-left" : "text-right"
       }`}
     >
-      <div className={`flex items-center gap-1 ${align === "left" ? "justify-start" : "justify-end"}`}>
+      <span className={isActive ? "text-[#E6EDF3]" : ""}>
         {label}
-        <span className={`text-[8px] transition-opacity ${isActive ? "opacity-100" : "opacity-0 group-hover:opacity-40"}`}>
-          {isActive ? (sortDir === "asc" ? "▲" : "▼") : "▼"}
-        </span>
-      </div>
+        {isActive && <span className="ml-0.5">{sortDir === "asc" ? "↑" : "↓"}</span>}
+      </span>
     </th>
   );
 }
