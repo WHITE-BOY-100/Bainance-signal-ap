@@ -406,24 +406,6 @@ function playAlert(kind){
   }catch(e){}
 }
 
-/* ── Binance signed request ──────────────────── */
-async function hmac(secret,msg){
-  const enc=new TextEncoder();
-  const key=await crypto.subtle.importKey("raw",enc.encode(secret),{name:"HMAC",hash:"SHA-256"},false,["sign"]);
-  const sig=await crypto.subtle.sign("HMAC",key,enc.encode(msg));
-  return Array.from(new Uint8Array(sig)).map(b=>b.toString(16).padStart(2,"0")).join("");
-}
-async function fetchBalance(apiKey,apiSecret){
-  const ts=Date.now();
-  const q=`timestamp=${ts}&recvWindow=10000`;
-  const sig=await hmac(apiSecret,q);
-  const res=await fetch(`https://api.binance.com/api/v3/account?${q}&signature=${sig}`,{headers:{"X-MBX-APIKEY":apiKey}});
-  if(!res.ok) throw new Error(`API error ${res.status}`);
-  const d=await res.json();
-  return (d.balances||[]).map(b=>({asset:b.asset,free:parseFloat(b.free),locked:parseFloat(b.locked)}))
-    .filter(b=>b.free+b.locked>0).sort((a,b)=>(b.free+b.locked)-(a.free+a.locked));
-}
-
 /* ── Sparkline ───────────────────────────────── */
 function Sparkline({data,positive}){
   if(!data||data.length<2) return <svg width="72" height="28"/>;
@@ -751,10 +733,13 @@ export default function ScalpTerminal(){
   function toggleWatch(sym){setWatchlist(p=>{const n=new Set(p);n.has(sym)?n.delete(sym):n.add(sym);return n;});}
 
   async function loadBal(){
-    const k=import.meta.env.VITE_BINANCE_API_KEY,s=import.meta.env.VITE_BINANCE_SECRET;
-    if(!k||!s){setBalError("API keys not set in Vercel environment variables");return;}
     setBalLoading(true);setBalError(null);
-    try{const d=await fetchBalance(k,s);setBalances(d);setShowBal(true);}
+    try{
+      const r=await fetch("/api/balance");
+      const d=await r.json();
+      if(!r.ok) throw new Error(d.error||"Failed to fetch balance");
+      setBalances(d.balances);setShowBal(true);
+    }
     catch(e){setBalError(e.message);}
     finally{setBalLoading(false);}
   }
